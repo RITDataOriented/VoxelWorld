@@ -11,12 +11,14 @@ using Unity.Transforms;
 using Unity.Collections;
 using Unity.Burst;
 using Unity.Jobs;
+using System.Runtime.InteropServices;
+using System;
 
 public class Chunk 
 {
     // data that all chunks use
     public static MeshInstanceRenderer[] renderers;
-    public static readonly int ChunkWidth = 8;
+    public static readonly int ChunkWidth = 32;
     public static readonly int ChunkHeight =128;
     public static NoiseAlgorithm alg = new NoiseAlgorithm();
 
@@ -24,7 +26,6 @@ public class Chunk
     private int PosX;
     private int PosZ;
 
-    
     public static void InitEntities()
     {
 
@@ -38,105 +39,141 @@ public class Chunk
         }
     }
 
-    public void Initialize(int cx, int cz)
+    public void Initialize(int cx, int cz, int idx, int idz)
     {
         PosX = cx;
         PosZ = cz;
-        GameManager.Log("Starting chunk");
+       
+        // 1D array containing all the block id's for the world
         NativeArray<int> blockIndices = new NativeArray<int>(ChunkWidth * ChunkHeight * ChunkWidth, Allocator.Temp);
+        // make the terrain, but return number of solid blocks in the world for this chunk
+        int solidBlocks = alg.setBlocks(blockIndices, PosX, PosZ);
+        // now make an array with just the real blocks and not air
+        // also need to keep positions of those blocks and if they're near air so
+        // that they should be drawn
+        NativeArray<int> solidBlockIndices = new NativeArray<int>(solidBlocks, Allocator.Temp);
+        Vector3[] positions = new Vector3[solidBlocks];
+        byte[] nearAir = new byte[solidBlocks];
 
-        //UnityEngine.Profiling.Profiler.BeginSample("My Sample");
-        alg.setBlocks(blockIndices, PosX, PosZ);
-        //UnityEngine.Profiling.Profiler.EndSample();
+        // calculate what should be drawn from the solid block list
+        // and put all the solid blocks into the same array
+        solidBlocks = 0;
+        int width = ChunkWidth;
+        int height = ChunkHeight;
+        for (int i = 0; i < blockIndices.Length; i++)
+        {
+            if (blockIndices[i] != (int)BlockTypes.Air)
+            {
+                int x = i / (height * width);
+                int y = (i - x * height * width) / width;
+                int z = i - x * height * width - y * width;
 
+                solidBlockIndices[solidBlocks] = blockIndices[i];
+                positions[solidBlocks] = new Vector3(x, y, z);
+                nearAir[solidBlocks] = checkAir(blockIndices, positions[solidBlocks], idx, idz);                 solidBlocks++;
+            }
+        }
+
+        int countEntities = 0;
         var entityManager = World.Active.GetOrCreateManager<EntityManager>();
+        int totalCount = solidBlockIndices.Length;
+        for (int index = 0; index < totalCount; index++)
+        {
 
-        // [TO DO] note: turns out we need to cut down on MeshInstanceRenderers
-        // so I'm grouping the vertices/etc. of each chunk together and
-        // batching it, but it doesn't seem like a final solution
-        // can't really jobify this since all it does is
-        // put the components with the right renderer into the entity system
-        // and the renderers are MeshInstanceRender's
-        //for (int index = 0; index < ChunkWidth * ChunkHeight * ChunkWidth; index++)
-        //{
-        // int x = index / (ChunkHeight * ChunkWidth);
-        // int y = (index - x * ChunkHeight * ChunkWidth) / ChunkWidth;
-        // int z = index - x * ChunkHeight * ChunkWidth - y * ChunkWidth;
+            if (nearAir[index] == 1)
+            {
+                countEntities++;
 
-        //if (!(blockIndices[index] == (int)BlockTypes.Air))
-        // {
-        //     // Access the ECS entity manager
+                float x = positions[index].x;
+                float y = positions[index].y;
+                float z = positions[index].z;
 
-        //     // create entity and add position and texture to it
-        //     Entity blockEntity = entityManager.CreateEntity(GameManager.blockArchetype);
-        //     entityManager.SetComponentData(blockEntity, new Position { Value = new float3(x + PosX, y, z + PosZ) });
-        //     //if ( x == 5 ) 
-        //     //    entityManager.SetComponentData(blockEntity, new MeshCulledComponent {  });
+                // create entity and add position and texture to it
+                Entity blockEntity = entityManager.CreateEntity(GameManager.blockArchetype);
+                entityManager.SetComponentData(blockEntity, new Position { Value = new float3(x + PosX, y, z + PosZ) });
+                entityManager.AddSharedComponentData(blockEntity, renderers[solidBlockIndices[index]]);
+            }
+        }
 
-        //     entityManager.AddSharedComponentData(blockEntity, renderers[blockIndices[index]]);
-        // }
-        //}
-
-        // NOTE: CHUNKWIDTH IS SMALL SO WE DON'T TRY TO COMBINE TOO MANY
-        // VERTICES FOR ONE CHUNK
-        MeshInstanceRenderer combinationRenderer =  GetLookFromPrototype("blockPrototype");
-        combinationRenderer.material.mainTexture = Blocks.atlas;
-        combinationRenderer.mesh = CombineMeshes(blockIndices);
-        Entity blockEntity = entityManager.CreateEntity(GameManager.blockArchetype);
-        entityManager.SetComponentData(blockEntity, new Position { Value = new float3(PosX, 0, PosZ) });
-        entityManager.AddSharedComponentData(blockEntity, combinationRenderer);
+        //GameManager.Log("number of entities created is: " + countEntities);
 
         blockIndices.Dispose();
+        // we would keep the blocks if we were doing something other than 
+        // just chucking them into the display system
+        solidBlockIndices.Dispose();
 
     }
 
+    private byte checkAir(NativeArray<int> blocks, Vector3 position, int idx, int idz)
+    {
+        byte nearAir = 0;
+        int checkIndex = 0;
+        int x = (int)position.x;
+        int y = (int)position.y;
+        int z = (int)position.z;
+        int width = ChunkWidth;
+        int height = ChunkHeight;
+        int transparent = (int)BlockTypes.Air;
+
+        // check top: y+1
+        checkIndex = checkIndex = z + x * height * width + (y+1) * width;
+        if (y+1 >= (height-1) || (blocks[checkIndex]== transparent))
+        {
+            nearAir = 1;
+        }
+        // check bottom: y-1
+        checkIndex = checkIndex = z + x * height * width + (y - 1) * width;
+        if (y - 1 < 0 || (blocks[checkIndex] == transparent))
+        {
+            nearAir = 1;
+        }
+
+        // check left: z-1
+        checkIndex = checkIndex = (z - 1) + x * height * width + y * width;
+        if (
+            ((idz == 0) && ((z - 1) < 0)) || 
+            ((z - 1) >= 0 && (blocks[checkIndex] == transparent)) )
+        {
+            nearAir = 1;
+        }
+
+        // check right: z+1
+        checkIndex = (z + 1) + x * height * width + y * width;
+        if (( (idz == VoxelWorld.chunkZ - 1) && (z + 1) >= (width - 1)) ||
+            ((z + 1) <= (width - 1)) && (blocks[checkIndex] == transparent))
+        {
+            nearAir = 1;
+        }
+
+
+        // check front: x-1
+        checkIndex = z + (x - 1) * height * width + y * width;
+        if (
+            ((idx == 0) && (x - 1) <= 0) ||
+            ((x - 1) >= 0) && (blocks[checkIndex] == transparent) )
+        {
+            nearAir = 1;
+        }
+
+        // check back: x+1
+        checkIndex = z + (x + 1) * height * width + y * width;
+        if ( ((idx == VoxelWorld.chunkX - 1) && (x + 1) >= (width - 1)) ||
+            ((x + 1) <= (width - 1)) && (blocks[checkIndex] == transparent))
+        {
+            nearAir = 1;
+        }
+
+        return nearAir;
+    }
+
+
+    // used as a utility to set up blocks to render
     private static MeshInstanceRenderer GetLookFromPrototype(string protoName)
     {
         var proto = GameObject.Find(protoName);
         var result = proto.GetComponent<MeshInstanceRendererComponent>().Value;
-        Object.Destroy(proto);
+        UnityEngine.Object.Destroy(proto);
         return result;
     }
 
-    private static Mesh CombineMeshes(NativeArray<int> blocks)
-    {
-        Mesh d = new Mesh();
-        List<Vector3> vertices = new List<Vector3>();
-        List<int> triangles = new List<int>();
-        List<Vector2> uvMaps = new List<Vector2>();
-        
-        for (int index = 0; index < ChunkWidth * ChunkHeight * ChunkWidth; index++)
-        {
-            int x = index / (ChunkHeight * ChunkWidth);
-            int y = (index - x * ChunkHeight * ChunkWidth) / ChunkWidth;
-            int z = index - x * ChunkHeight * ChunkWidth - y * ChunkWidth;
-
-
-            if (!(blocks[index] == (int)BlockTypes.Air))
-            {
-                Mesh currentMesh = renderers[blocks[index]].mesh;
-                int count = vertices.Count;
-                for (int locIndex = 0; locIndex < currentMesh.vertices.Length; locIndex++)
-                {
-                    vertices.Add(currentMesh.vertices[locIndex] + new Vector3(x, y, z));
-                }
-
-                for (int i = 0; i < currentMesh.triangles.Length; i++)
-                {
-                    triangles.Add(currentMesh.triangles[i] + count);
-                }
-
-                uvMaps.AddRange(currentMesh.uv);
-            }
-        }
-
-        d.vertices = vertices.ToArray();
-        d.triangles = triangles.ToArray();
-        d.uv = uvMaps.ToArray();
-        d.RecalculateNormals();
-        d.RecalculateBounds();
-
-        return d;
-    }
-    
 }

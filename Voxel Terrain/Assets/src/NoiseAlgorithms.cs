@@ -35,11 +35,11 @@ public class NoiseAlgorithm
     // perlin specific noise variables
     public float positionX;
     public float positionZ;
-    public int perlinOctaves;
-    public float perlinFrequency;
-    public float perlinAmplitude;
-    public float perlinLacunarity;
-    public float perlinGain;
+    public int octaves;
+    public float frequency;
+    public float amplitude;
+    public float lacunarity;
+    public float gain;
     public float scale;
 
     public void InitializeBlocks(int w, int h, int d, int mh, int seaLvl)
@@ -62,21 +62,21 @@ public class NoiseAlgorithm
 
     public void InitializePerlinNoise()
     {
-        perlinFrequency = 1;
-        perlinAmplitude = 0.5f;
-        perlinOctaves = 8;
-        perlinLacunarity = 2.0f;
-        perlinGain = 0.5f;
+        frequency = 1;
+        amplitude = 0.5f;
+        octaves = 8;
+        lacunarity = 2.0f;
+        gain = 0.5f;
         scale = 0.01f;
     }
 
     public void InitializePerlinNoise(float freq, float amp, int oct, float lac, float gain, float sc)
     {
-        perlinFrequency = freq;
-        perlinAmplitude = amp;
-        perlinOctaves = oct;
-        perlinLacunarity = lac;
-        perlinGain = gain;
+        frequency = freq;
+        amplitude = amp;
+        octaves = oct;
+        lacunarity = lac;
+        gain = gain;
         scale = sc;
     }
 
@@ -147,7 +147,7 @@ public class NoiseAlgorithm
 
     // assumes that InitializeBlocks has been called first
     // blocks should be in a 1D array
-    public void setBlocks(NativeArray<int> blockIndices, int cx, int cy)
+    public int setBlocks(NativeArray<int> blockIndices, int cx, int cy)
     {
 
         // set up and run noise function
@@ -166,11 +166,11 @@ public class NoiseAlgorithm
             positionX = cx,
             positionZ = cy,
             scale = this.scale,
-            perlinOctaves = this.perlinOctaves,
-            perlinFrequency = this.perlinFrequency,
-            perlinAmplitude = this.perlinAmplitude,
-            perlinLacunarity = this.perlinLacunarity,
-            perlinGain = this.perlinGain,
+            octaves = this.octaves,
+            frequency = this.frequency,
+            amplitude = this.amplitude,
+            lacunarity = this.lacunarity,
+            gain = this.gain,
         };
         var perlinJob = perlin.Schedule(width * depth, 64);
         perlinJob.Complete();
@@ -197,6 +197,17 @@ public class NoiseAlgorithm
         var blockCreationJob = blockCreation.Schedule(width * depth * height, 64);
         blockCreationJob.Complete();
 
+        // return a summation of real (not air) blocks in the the list after
+        // terrain creation
+        int solidBlocks = 0;
+        for (int i=0; i<blockIndices.Length; i++)
+        {
+            if (blockIndices[i] != (int)BlockTypes.Air)
+            {
+                solidBlocks++;
+            }
+        }
+        return solidBlocks;
     }
 
     public void OnExit()
@@ -207,7 +218,7 @@ public class NoiseAlgorithm
     }
 }
 
-[BurstCompile]
+[BurstCompile(CompileSynchronously = true)]
 public struct CreateBlocks : IJobParallelFor
 {
 
@@ -253,7 +264,7 @@ public struct CreateBlocks : IJobParallelFor
 }
 
 
-[BurstCompile]
+[BurstCompile(CompileSynchronously = true)]
 public struct CalculatePerlin : IJobParallelFor
 {
     public NativeArray<float> heightMap;
@@ -269,11 +280,11 @@ public struct CalculatePerlin : IJobParallelFor
     [ReadOnly] public float positionX;
     [ReadOnly] public float positionZ;
     [ReadOnly] public float scale;
-    [ReadOnly] public int perlinOctaves;
-    [ReadOnly] public float perlinFrequency;
-    [ReadOnly] public float perlinAmplitude;
-    [ReadOnly] public float perlinLacunarity;
-    [ReadOnly] public float perlinGain;
+    [ReadOnly] public int octaves;
+    [ReadOnly] public float frequency;
+    [ReadOnly] public float amplitude;
+    [ReadOnly] public float lacunarity;
+    [ReadOnly] public float gain;
 
     // fill a 1D array that is actually 2D with perlin noise, representing a heightmap
     public void Execute(int index)
@@ -283,16 +294,18 @@ public struct CalculatePerlin : IJobParallelFor
         // of the map, we scale and offset them
         int x = index / width;
         int y = index % width;
-        heightMap[index] = height2d((positionX + x) * scale + xOffset, (positionZ + y) * scale + yOffset, perlinOctaves, perlinLacunarity, perlinGain) + zOffset;
+        heightMap[index] = height2d((positionX + x) * scale + xOffset, (positionZ + y) * scale + yOffset, octaves, lacunarity, gain) + zOffset;
     }
 
     // return a single value for a heightmap
-    // apply gain as discussed by Perlin
+    // apply gain 
+    // does basic fractal brownian motion
+    // by increasing the freq.
     private float height2d(float x, float y, int octaves,
              float lacunarity = 1.0f, float gain = 1.0f)
     {
 
-        float freq = perlinFrequency, amp = perlinAmplitude;
+        float freq = frequency, amp = amplitude;
         float sum = 0.0f;
         for (int i = 0; i < octaves; i++)
         {
@@ -419,7 +432,7 @@ public struct CalculatePerlin : IJobParallelFor
 // this is written separately from the alg to 
 // allow for different normalization techniques to be used
 // although it's very simple at the moment...
-[BurstCompile]
+[BurstCompile(CompileSynchronously = true)]
 public struct NormalizePerlin : IJobParallelFor
 {
     public NativeArray<float> heightMap;

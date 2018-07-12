@@ -10,6 +10,7 @@ using Unity.Collections;
 using System.Text;
 using System;
 using Unity.Jobs;
+using System.Diagnostics;
 
 public class GameManager : ComponentSystem {
 
@@ -18,12 +19,14 @@ public class GameManager : ComponentSystem {
     public static EntityArchetype blockArchetype;
     public static EntityArchetype atlasUVArchetype;
     public static StringBuilder mainLogText = new StringBuilder();
-    private static int logTextAdded = 0;    
+    private static int logTextAdded = 0;
+    public static Stopwatch watch;
 
     // Use this for initialization
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
     public static void Initialize() { 
         entityManager = World.Active.GetOrCreateManager<EntityManager>();
+        watch = Stopwatch.StartNew();
 
         // archetype for all the cube textures
         atlasUVArchetype = entityManager.CreateArchetype(typeof(TextureUV));
@@ -43,10 +46,14 @@ public class GameManager : ComponentSystem {
 
     protected override void OnUpdate() {
         doFileWriteJob();
+
     }
 
     protected override void OnStopRunning()
     {
+
+        // initialize the world now that all blocks are created
+        VoxelWorld.instance.OnExit();
         // this should be last to catch all potential log messages
         doFileWriteJob();
 

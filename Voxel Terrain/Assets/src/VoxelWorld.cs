@@ -8,14 +8,17 @@ public class VoxelWorld  {
     public static VoxelWorld instance = new VoxelWorld();
     private bool RanOnce = false;
     private static Chunk[,] chunks;
-    private static int chunkX = 16;
-    private static int chunkZ = 16;
+    public static int chunkX = 4;
+    public static int chunkZ = 4;
 
     // Use this for initialization
     public void Start()
     {
         GameManager.Log("Initializing World Thread");
-        Debug.Log("Initializing World thread");
+        GameManager.watch.Stop();
+        GameManager.Log("Creating world at: " + GameManager.watch.ElapsedMilliseconds);
+        GameManager.watch.Start();
+
         try
         {
             if (!RanOnce)
@@ -35,7 +38,7 @@ public class VoxelWorld  {
                     for (int j = 0; j < chunkZ; j++)
                     {
                         chunks[i, j] = new Chunk();
-                        chunks[i, j].Initialize(i * Chunk.ChunkWidth, j * Chunk.ChunkWidth);
+                        chunks[i, j].Initialize(i * Chunk.ChunkWidth, j * Chunk.ChunkWidth, i, j);
                     }
                 }
 
@@ -46,6 +49,8 @@ public class VoxelWorld  {
         {
             GameManager.Log(e.ToString());
         }
+        GameManager.watch.Stop();
+        GameManager.Log("Done with world creation at: " + GameManager.watch.ElapsedMilliseconds);
 
     }
 
